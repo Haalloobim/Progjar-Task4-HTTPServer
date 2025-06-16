@@ -1,82 +1,102 @@
 import socket
-import sys
 import os
+import sys
+import logging
+import ssl
 
-def list_files(host, port, directory_path):
-    """Mengirim permintaan GET untuk melihat daftar file."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def make_socket(destination_address='localhost', port=12000):
     try:
-        sock.connect((host, port))
-        request = f"GET {directory_path} HTTP/1.1\r\nHost: {host}\r\n\r\n"
-        sock.sendall(request.encode())
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_address = (destination_address, port)
+        sock.connect(server_address)
+        return sock
+    except Exception as ee:
+        logging.warning(f"error {str(ee)}")
+        return None
 
-        response = sock.recv(4096).decode()
-        print("--- Server Response ---")
-        print(response)
+def send_command(command_str, server_address):
+    alamat_server = server_address[0]
+    port_server = server_address[1]
+    sock = make_socket(alamat_server, port_server)
+    if not sock:
+        return "Connection failed"
+    
+    try:
+        sock.sendall(command_str.encode())
+        data_received = b""
+        while True:
+            data = sock.recv(4096)
+            if data:
+                data_received += data
+                if len(data) < 4096:
+                    break
+            else:
+                break
+        return data_received.decode(errors="ignore")
+    except Exception as ee:
+        logging.warning(f"error during data receiving {str(ee)}")
+        return f"Error: {str(ee)}"
     finally:
         sock.close()
 
-def upload_file(host, port, file_path):
-    """Mengirim permintaan POST untuk mengunggah file."""
-    if not os.path.exists(file_path):
-        print(f"Error: File '{file_path}' tidak ditemukan.")
-        return
+def get_command(server_address, dir=''):
+    command = f"GET /{dir} HTTP/1.0\r\n\r\n"
+    result = send_command(command, server_address)
+    print(result)
+    return result
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def post_command(server_address, filename):
     try:
-        sock.connect((host, port))
-        
-        filename = os.path.basename(file_path)
-        with open(file_path, 'rb') as f:
-            file_content = f.read()
+        with open(filename, "rb") as f:
+            content = f.read()
 
-        boundary = b"----ClientBoundary123"
-        
-        # Bangun body request dalam bentuk bytes
-        body_parts = [
-            b'--' + boundary,
-            f'Content-Disposition: form-data; name="file"; filename="{filename}"'.encode(),
-            b'Content-Type: application/octet-stream',
-            b'',
-            file_content,
-            b'--' + boundary + b'--',
-            b''
+        headers = [
+            f"POST /upload HTTP/1.0",
+            f"Filename: {os.path.basename(filename)}",
+            f"Content-Length: {len(content)}",
+            "\r\n"
         ]
-        body = b'\r\n'.join(body_parts)
-
-        # Bangun header request
-        headers_str = "\r\n".join([
-            f"POST /upload HTTP/1.1",
-            f"Host: {host}",
-            f"Content-Type: multipart/form-data; boundary={boundary.decode()}",
-            f"Content-Length: {len(body)}"
-        ])
-        request = headers_str.encode() + b"\r\n\r\n" + body
+        command = "\r\n".join(headers).encode() + content
         
-        sock.sendall(request)
+        sock = make_socket(server_address[0], server_address[1])
+        if not sock:
+            return "Connection failed"
+        
+        try:
+            sock.sendall(command)
+            data_received = b""
+            while True:
+                data = sock.recv(4096)
+                if data:
+                    data_received += data
+                    if len(data) < 4096:
+                        break
+                else:
+                    break
+            result = data_received.decode(errors="ignore")
+            print(result)
+            return result
+        except Exception as ee:
+            logging.warning(f"error during data receiving {str(ee)}")
+            return f"Error: {str(ee)}"
+        finally:
+            sock.close()
+            
+    except FileNotFoundError:
+        print(f"Error: Local file '{filename}' not found.")
+        return "File not found"
+    except Exception as e:
+        print(f"An error occurred during upload: {e}")
+        return f"Error: {str(e)}"
 
-        response = sock.recv(4096).decode()
-        print("--- Server Response ---")
-        print(response)
+def delete_command(server_address, filename):
+    command = f"DELETE /{filename} HTTP/1.0\r\n\r\n"
+    result = send_command(command, server_address)
+    print(result)
+    return result
 
-    finally:
-        sock.close()
-
-def delete_file(host, port, file_path_on_server):
-    """Mengirim permintaan DELETE untuk menghapus file."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.connect((host, port))
-        request = f"DELETE {file_path_on_server} HTTP/1.1\r\nHost: {host}\r\n\r\n"
-        sock.sendall(request.encode())
-
-        response = sock.recv(4096).decode()
-        print("--- Server Response ---")
-        print(response)
-    finally:
-        sock.close()
-
-def main():
+if __name__ == "__main__":
+    
     if len(sys.argv) < 5:
         print("Penggunaan: python client_custom.py <host> <port> <command> [args]")
         print("Perintah:")
@@ -90,15 +110,15 @@ def main():
     command = sys.argv[3]
     path = sys.argv[4]
 
+    server_addr = (host, port)
+
     if command == 'list':
-        list_files(host, port, path)
+        get_command(server_addr, path) 
     elif command == 'upload':
-        upload_file(host, port, path)
+        post_command(server_addr, path)
     elif command == 'delete':
-        delete_file(host, port, path)
+        delete_command(server_addr, path)
     else:
         print(f"Perintah '{command}' tidak valid.")
         sys.exit(1)
-
-if __name__ == "__main__":
-    main()
+       

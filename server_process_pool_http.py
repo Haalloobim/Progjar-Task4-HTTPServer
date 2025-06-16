@@ -13,34 +13,47 @@ httpserver = HttpServer()
 #maka class ProcessTheClient dirubah dulu menjadi function, tanpda memodifikasi behaviour didalamnya
 
 def ProcessTheClient(connection,address):
-		rcv=""
-		while True:
-			try:
-				data = connection.recv(32)
-				if data:
-					#merubah input dari socket (berupa bytes) ke dalam string
-					#agar bisa mendeteksi \r\n
-					d = data.decode()
-					rcv=rcv+d
-					if rcv[-2:]=='\r\n':
-						#end of command, proses string
-						#logging.warning("data dari client: {}" . format(rcv))
-						hasil = httpserver.proses(rcv)
-						#hasil akan berupa bytes
-						#untuk bisa ditambahi dengan string, maka string harus di encode
-						hasil=hasil+"\r\n\r\n".encode()
-						#logging.warning("balas ke  client: {}" . format(hasil))
-						#hasil sudah dalam bentuk bytes
-						connection.sendall(hasil)
-						rcv=""
-						connection.close()
-						return
-				else:
-					break
-			except OSError as e:
-				pass
-		connection.close()
-		return
+    try:
+        header_data = b''
+        content_length = 0
+        body = b''
+        
+        while True:
+            chunk = connection.recv(1024)
+            if not chunk:
+                break
+                
+            header_data += chunk
+            
+            if b'\r\n\r\n' in header_data:
+                headers_part, body_part = header_data.split(b'\r\n\r\n', 1)
+                headers_text = headers_part.decode('utf-8')
+                
+                for line in headers_text.split('\r\n'):
+                    if line.lower().startswith('content-length:'):
+                        content_length = int(line.split(':', 1)[1].strip())
+                        break
+                
+                body = body_part
+                break
+        
+        if content_length > 0:
+            while len(body) < content_length:
+                chunk = connection.recv(min(65535, content_length - len(body)))
+                if not chunk:
+                    break
+                body += chunk
+        
+        complete_data = headers_part + b'\r\n\r\n' + body
+        
+        hasil = httpserver.proses(complete_data)
+        
+        hasil = hasil + b"\r\n\r\n"
+        connection.sendall(hasil)
+    except Exception as e:
+        print(f"Error processing client: {e}")
+    finally:
+        connection.close()
 
 
 
@@ -50,25 +63,26 @@ def Server():
 	my_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
 	my_socket.bind(('0.0.0.0', 8889))
-	my_socket.listen(1)
-
+	my_socket.listen(10)
+    
+	logging.warning("Server started on port 8889")
 	with ProcessPoolExecutor(20) as executor:
 		while True:
-				connection, client_address = my_socket.accept()
-				#logging.warning("connection from {}".format(client_address))
-				p = executor.submit(ProcessTheClient, connection, client_address)
-				the_clients.append(p)
-				#menampilkan jumlah process yang sedang aktif
-				jumlah = ['x' for i in the_clients if i.running()==True]
-				print(jumlah)
+			connection, client_address = my_socket.accept()
+			#logging.warning("connection from {}".format(client_address))
+			p = executor.submit(ProcessTheClient, connection, client_address)
+			the_clients.append(p)
+			#menampilkan jumlah process yang sedang aktif
+			jumlah = ['x' for i in the_clients if i.running()==True]
+			print(jumlah)
 
 
 
 
 
 def main():
-	Server()
+    Server()
 
 if __name__=="__main__":
-	main()
+    main()
 
